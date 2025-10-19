@@ -4,14 +4,14 @@ A simple Streamlit web application for an Urdu language chatbot using a custom-t
 
 ## Features
 
-✅ **Urdu Input/Output** - Full support for Urdu text with right-to-left (RTL) rendering
-✅ **Multiple Decoding Strategies**:
+ **Urdu Input/Output** - Full support for Urdu text with right-to-left (RTL) rendering
+**Multiple Decoding Strategies**:
    - Greedy Decoding (fastest, deterministic)
    - Beam Search (balanced, explores top candidates)
    - Sampling (creative, with temperature, top-k, and repetition penalties)
-✅ **Conversation History** - View all your chat interactions
-✅ **Adjustable Parameters** - Customize max length, beam width, temperature, etc.
-✅ **Clean UI** - Simple and easy-to-use interface
+**Conversation History** - View all your chat interactions
+**Adjustable Parameters** - Customize max length, beam width, temperature, etc.
+**Clean UI** - Simple and easy-to-use interface
 
 ## Installation
 
@@ -68,21 +68,5 @@ Make sure you have the following files in the `Model/` directory:
 - Lower **Temperature** (0.5-0.8) for more focused responses
 - Adjust **Repetition Penalty** (1.2-1.5) to reduce repetitive text
 - Use **Beam Search** (beam width 3-5) for more balanced outputs
-
-## Troubleshooting
-
-If you encounter any issues:
-1. Ensure all model files are in the `Model/` directory
-2. Check that the file paths in `model_config.json` are correct
-3. Verify that PyTorch is installed correctly
-4. Make sure you have sufficient memory (model requires ~500MB)
-
-## System Requirements
-
-- Python 3.8+
-- 2GB+ RAM
-- GPU optional (CPU works fine for inference)
-
----
 
 Built with ❤️ using PyTorch and Streamlit
