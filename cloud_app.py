@@ -647,17 +647,37 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
 @st.cache_resource
 def load_model():
     """Load the trained model and tokenizer."""
-    model_dir = Path("Model")
     
+    repo_id = "hurairamuzammal/transformer_NLP_A02"
+    config_filename = "cloud_config.json"
+
+    # Download config file
+    config_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=config_filename
+    )
+
     # Load config
-    with open(model_dir / "model_config.json", "r") as f:
+    with open(config_path, "r") as f:
         config = json.load(f)
     
     model_config = config["model_config"]
+    model_filename = config["model_bundle"]
+    tokenizer_filename = config["tokenizer_file"]
+
+    # Download tokenizer and model files
+    tokenizer_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=tokenizer_filename
+    )
+    model_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=model_filename
+    )
     
     # Load tokenizer
     sp = spm.SentencePieceProcessor()
-    sp.load(str(model_dir / config["tokenizer_file"]))
+    sp.load(str(tokenizer_path))
     
     # Create model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -671,12 +691,7 @@ def load_model():
         dropout=model_config["dropout"]
     )
     
-    # Load weights from Hugging Face Hub
-    model_path = hf_hub_download(
-        repo_id="hurairamuzammal/transformer_NLP_A02",
-        filename="urdu_transformer_best.pth",
-        
-    )
+    # Load weights
     checkpoint = torch.load(model_path, map_location=device)
     
     # Handle different checkpoint formats
