@@ -5,6 +5,7 @@ import sentencepiece as spm
 import json
 import math
 from pathlib import Path
+from huggingface_hub import hf_hub_download
 
 # Set page config
 st.set_page_config(
@@ -670,9 +671,13 @@ def load_model():
         dropout=model_config["dropout"]
     )
     
-    # Load weights
-    model_url = "https://huggingface.co/hurairamuzammal/transformer_NLP_A02/resolve/main/urdu_transformer_best.pth"
-    checkpoint = torch.hub.load_state_dict_from_url(model_url, map_location=device, progress=True)
+    # Load weights from Hugging Face Hub
+    model_path = hf_hub_download(
+        repo_id="hurairamuzammal/transformer_NLP_A02",
+        filename="urdu_transformer_best.pth",
+        
+    )
+    checkpoint = torch.load(model_path, map_location=device)
     
     # Handle different checkpoint formats
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
