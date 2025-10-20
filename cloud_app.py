@@ -5,16 +5,15 @@ import sentencepiece as spm
 import json
 import math
 from pathlib import Path
+import copy
+import time
 from huggingface_hub import hf_hub_download
 
-# Set page config
 st.set_page_config(
     page_title="Urdu Transformer Chatbot",
-    page_icon="💬",
     layout="wide"
 )
 
-# Add custom CSS for Urdu RTL support
 st.markdown("""
 <style>
     .urdu-text {
@@ -93,15 +92,9 @@ st.markdown("""
 # ==================== Model Architecture ====================
 
 def clones(module, N):
-    "Produce N identical layers."
-    import copy
     return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
 
 class EncoderDecoder(nn.Module):
-    """
-    A standard Encoder-Decoder architecture. Base for this and many
-    other models.
-    """
     def __init__(self, encoder, decoder, src_embed, tgt_embed, generator):
         super(EncoderDecoder, self).__init__()
         self.encoder = encoder
@@ -111,7 +104,6 @@ class EncoderDecoder(nn.Module):
         self.generator = generator
         
     def forward(self, src, tgt, src_mask, tgt_mask):
-        "Take in and process masked src and target sequences."
         return self.decode(self.encode(src, src_mask), src_mask,
                             tgt, tgt_mask)
     
@@ -122,7 +114,6 @@ class EncoderDecoder(nn.Module):
         return self.decoder(self.tgt_embed(tgt), memory, src_mask, tgt_mask)
 
 class Generator(nn.Module):
-    "Define standard linear + softmax generation step."
     def __init__(self, d_model, vocab):
         super(Generator, self).__init__()
         self.proj = nn.Linear(d_model, vocab)
@@ -131,20 +122,17 @@ class Generator(nn.Module):
         return torch.log_softmax(self.proj(x), dim=-1)
 
 class Encoder(nn.Module):
-    "Core encoder is a stack of N layers"
     def __init__(self, layer, N):
         super(Encoder, self).__init__()
         self.layers = clones(layer, N)
         self.norm = LayerNorm(layer.size)
         
     def forward(self, x, mask):
-        "Pass the input (and mask) through each layer in turn."
         for layer in self.layers:
             x = layer(x, mask)
         return self.norm(x)
 
 class LayerNorm(nn.Module):
-    "Construct a layernorm module (See citation for details)."
     def __init__(self, features, eps=1e-6):
         super(LayerNorm, self).__init__()
         self.a_2 = nn.Parameter(torch.ones(features))
@@ -157,21 +145,15 @@ class LayerNorm(nn.Module):
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
 
 class SublayerConnection(nn.Module):
-    """
-    A residual connection followed by a layer norm.
-    Note for code simplicity the norm is first as opposed to last.
-    """
     def __init__(self, size, dropout):
         super(SublayerConnection, self).__init__()
         self.norm = LayerNorm(size)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, sublayer):
-        "Apply residual connection to any sublayer with the same size."
         return x + self.dropout(sublayer(self.norm(x)))
 
 class EncoderLayer(nn.Module):
-    "Encoder is made up of self-attn and feed forward (defined below)"
     def __init__(self, size, self_attn, feed_forward, dropout):
         super(EncoderLayer, self).__init__()
         self.self_attn = self_attn
@@ -180,12 +162,10 @@ class EncoderLayer(nn.Module):
         self.size = size
 
     def forward(self, x, mask):
-        "Follow Figure 1 (left) for connections."
         x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
         return self.sublayer[1](x, self.feed_forward)
 
 class Decoder(nn.Module):
-    "Generic N layer decoder with masking."
     def __init__(self, layer, N):
         super(Decoder, self).__init__()
         self.layers = clones(layer, N)
@@ -197,7 +177,6 @@ class Decoder(nn.Module):
         return self.norm(x)
 
 class DecoderLayer(nn.Module):
-    "Decoder is made of self-attn, src-attn, and feed forward (defined below)"
     def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
         super(DecoderLayer, self).__init__()
         self.size = size
@@ -207,20 +186,17 @@ class DecoderLayer(nn.Module):
         self.sublayer = clones(SublayerConnection(size, dropout), 3)
  
     def forward(self, x, memory, src_mask, tgt_mask):
-        "Follow Figure 1 (right) for connections."
         m = memory
         x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
         x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
         return self.sublayer[2](x, self.feed_forward)
 
 def subsequent_mask(size):
-    "Mask out subsequent positions."
     attn_shape = (1, size, size)
     subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1).type(torch.uint8)
     return subsequent_mask == 0
 
 def attention(query, key, value, mask=None, dropout=None):
-    "Compute 'Scaled Dot Product Attention'"
     d_k = query.size(-1)
     scores = torch.matmul(query, key.transpose(-2, -1)) \
              / math.sqrt(d_k)
@@ -233,10 +209,8 @@ def attention(query, key, value, mask=None, dropout=None):
 
 class MultiHeadedAttention(nn.Module):
     def __init__(self, h, d_model, dropout=0.1):
-        "Take in model size and number of heads."
         super(MultiHeadedAttention, self).__init__()
         assert d_model % h == 0
-        # We assume d_v always equals d_k
         self.d_k = d_model // h
         self.h = h
         self.linears = clones(nn.Linear(d_model, d_model), 4)
@@ -244,28 +218,22 @@ class MultiHeadedAttention(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         
     def forward(self, query, key, value, mask=None):
-        "Implements Figure 2"
         if mask is not None:
-            # Same mask applied to all h heads.
             mask = mask.unsqueeze(1)
         nbatches = query.size(0)
         
-        # 1) Do all the linear projections in batch from d_model => h x d_k 
         query, key, value = \
             [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
              for l, x in zip(self.linears, (query, key, value))]
         
-        # 2) Apply attention on all the projected vectors in batch. 
         x, self.attn = attention(query, key, value, mask=mask, 
                                  dropout=self.dropout)
         
-        # 3) "Concat" using a view and apply a final linear. 
         x = x.transpose(1, 2).contiguous() \
              .view(nbatches, -1, self.h * self.d_k)
         return self.linears[-1](x)
 
 class PositionwiseFeedForward(nn.Module):
-    "Implements FFN equation."
     def __init__(self, d_model, d_ff, dropout=0.1):
         super(PositionwiseFeedForward, self).__init__()
         self.w_1 = nn.Linear(d_model, d_ff)
@@ -285,12 +253,10 @@ class Embeddings(nn.Module):
         return self.lut(x) * math.sqrt(self.d_model)
 
 class PositionalEncoding(nn.Module):
-    "Implement the PE function."
     def __init__(self, d_model, dropout, max_len=5000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
         
-        # Compute the positional encodings once in log space.
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2) *
@@ -306,8 +272,6 @@ class PositionalEncoding(nn.Module):
 
 def make_model(src_vocab, tgt_vocab, N=6, 
                d_model=512, d_ff=2048, h=8, dropout=0.1):
-    "Helper: Construct a model from hyperparameters."
-    import copy
     c = copy.deepcopy
     attn = MultiHeadedAttention(h, d_model)
     ff = PositionwiseFeedForward(d_model, d_ff, dropout)
@@ -320,8 +284,6 @@ def make_model(src_vocab, tgt_vocab, N=6,
         nn.Sequential(Embeddings(d_model, tgt_vocab), c(position)),
         Generator(d_model, tgt_vocab))
     
-    # This was important from their code. 
-    # Initialize parameters with Glorot / fan_avg.
     for p in model.parameters():
         if p.dim() > 1:
             nn.init.xavier_uniform_(p)
@@ -330,7 +292,6 @@ def make_model(src_vocab, tgt_vocab, N=6,
 # ==================== Helper Functions ====================
 
 def get_sentinel_ids(sp, required=2):
-    """Collect sentinel ids from the tokenizer."""
     SENTINEL_PIECES = ("<extra_id_0>", "<extra_id_1>", "<extra_id_2>")
     ids = []
     for piece in SENTINEL_PIECES:
@@ -394,18 +355,12 @@ def _sample_next_token(
     generated_ids,
     *,
     temperature,
-    top_k,
-    repetition_penalty,
-    no_repeat_ngram_size,
     special_token_ids=None,
     decode_blocked_ids=None,
 ):
     filtered = logits.clone()
     if decode_blocked_ids:
         filtered[:, list(decode_blocked_ids)] = float('-inf')
-    filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
-    filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
-    filtered = _top_k_filtering(filtered, top_k)
 
     if not torch.isfinite(filtered).any():
         filtered = logits
@@ -423,7 +378,6 @@ def _sample_next_token(
 # ==================== Generation Functions ====================
 
 def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_blocked_ids=None):
-    """Greedy decoding - always picks the highest probability token."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -446,11 +400,9 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
             next_log_probs = actual_model.generator(out[:, -1])
             
-            # Block special tokens
             if decode_blocked_ids:
                 next_log_probs[:, list(decode_blocked_ids)] = float('-inf')
             
-            # Greedy selection
             next_token = next_log_probs.argmax(dim=-1).item()
             
             if next_token == sp.eos_id():
@@ -459,7 +411,6 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
             ys = torch.cat([ys, torch.tensor([[next_token]], device=device)], dim=1)
             generated_ids.append(next_token)
 
-    # Clean up output
     cleaned = []
     for idx in generated_ids:
         if idx == sp.eos_id():
@@ -471,7 +422,6 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
     return sp.decode(cleaned).strip() if cleaned else ""
 
 def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_token_ids=None, decode_blocked_ids=None):
-    """Beam search decoding - maintains top-k candidates."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -486,7 +436,6 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
         memory = actual_model.encode(src, src_mask)
 
-        # Initialize beams: (sequence, score)
         beams = [([sp.bos_id()], 0.0)]
         
         for _ in range(max_len):
@@ -502,11 +451,9 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
                 out = actual_model.decode(memory, src_mask, ys, tgt_mask)
                 next_log_probs = actual_model.generator(out[:, -1])
                 
-                # Block special tokens
                 if decode_blocked_ids:
                     next_log_probs[:, list(decode_blocked_ids)] = float('-inf')
                 
-                # Get top beam_width tokens
                 top_probs, top_indices = torch.topk(next_log_probs[0], beam_width)
                 
                 for prob, idx in zip(top_probs, top_indices):
@@ -514,18 +461,14 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
                     new_score = score + prob.item()
                     candidates.append((new_seq, new_score))
             
-            # Keep top beam_width candidates
             beams = sorted(candidates, key=lambda x: x[1], reverse=True)[:beam_width]
             
-            # Check if all beams ended
             if all(seq[-1] == sp.eos_id() for seq, _ in beams):
                 break
         
-        # Get best sequence
         best_seq, _ = beams[0]
-        generated_ids = best_seq[1:]  # Remove BOS
+        generated_ids = best_seq[1:]
         
-    # Clean up output
     cleaned = []
     for idx in generated_ids:
         if idx == sp.eos_id():
@@ -536,10 +479,8 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def sampling_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40, 
-                     repetition_penalty=1.2, no_repeat_ngram_size=3, 
+def sampling_generate(model, sp, text, max_len=60, temperature=0.9, 
                      special_token_ids=None, decode_blocked_ids=None):
-    """Sampling with temperature, top-k, and repetition penalties."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -566,9 +507,6 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
                 next_log_probs,
                 generated_ids,
                 temperature=temperature,
-                top_k=top_k,
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
                 special_token_ids=special_token_ids,
                 decode_blocked_ids=decode_blocked_ids,
             )
@@ -579,7 +517,6 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
             ys = torch.cat([ys, torch.tensor([[next_token]], device=device)], dim=1)
             generated_ids.append(next_token)
 
-    # Clean up output
     cleaned = []
     for idx in generated_ids:
         if idx == sp.eos_id():
@@ -590,10 +527,8 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def streaming_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40, 
-                      repetition_penalty=1.2, no_repeat_ngram_size=3, 
+def streaming_generate(model, sp, text, max_len=60, temperature=0.9, 
                       special_token_ids=None, decode_blocked_ids=None):
-    """Streaming generation with token-by-token yield for display."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -620,9 +555,6 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
                 next_log_probs,
                 generated_ids,
                 temperature=temperature,
-                top_k=top_k,
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
                 special_token_ids=special_token_ids,
                 decode_blocked_ids=decode_blocked_ids,
             )
@@ -633,7 +565,6 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
             ys = torch.cat([ys, torch.tensor([[next_token]], device=device)], dim=1)
             generated_ids.append(next_token)
             
-            # Clean up the current sequence for yielding
             cleaned_ids = []
             for idx in generated_ids:
                 if special_token_ids and idx in special_token_ids:
@@ -646,29 +577,21 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.9, top_k=40,
 
 @st.cache_resource
 def load_model():
-    """Load the trained model and tokenizer."""
-    
     repo_id = "hurairamuzammal/transformer_NLP_A02"
     config_filename = "model_config.json"
 
-    # Download config file
     config_path = hf_hub_download(
         repo_id=repo_id,
         filename=config_filename
     )
 
-    # Load config
     with open(config_path, "r") as f:
         config = json.load(f)
     
     model_config = config["model_config"]
-    # The model bundle in the config is "urdu_transformer_best.pth"
-    # but the file on the hub might have a different name if it was uploaded manually.
-    # Let's stick to the known filename.
     model_filename = "urdu_transformer_best.pth" 
     tokenizer_filename = config["tokenizer_file"]
 
-    # Download tokenizer and model files
     tokenizer_path = hf_hub_download(
         repo_id=repo_id,
         filename=tokenizer_filename
@@ -678,11 +601,9 @@ def load_model():
         filename=model_filename
     )
     
-    # Load tokenizer
     sp = spm.SentencePieceProcessor()
     sp.load(str(tokenizer_path))
     
-    # Create model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = make_model(
         src_vocab=model_config["src_vocab"],
@@ -694,10 +615,8 @@ def load_model():
         dropout=model_config["dropout"]
     )
     
-    # Load weights
     checkpoint = torch.load(model_path, map_location=device)
     
-    # Handle different checkpoint formats
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state_dict = checkpoint["state_dict"]
     elif isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
@@ -707,11 +626,9 @@ def load_model():
     else:
         state_dict = checkpoint
     
-    # Fix key names if necessary
     fixed_state_dict = {}
     for key, value in state_dict.items():
         new_key = key.replace("decoder.layer.", "decoder.layers.")
-        new_key = new_key.replace("encoder.layer.", "encoder.layers.")
         fixed_state_dict[new_key] = value
     
     model.load_state_dict(fixed_state_dict)
@@ -719,7 +636,6 @@ def load_model():
     model.to(device)
     model.eval()
     
-    # Get special tokens
     special_token_ids, sentinel_token_ids = _collect_special_token_ids(sp)
     decode_blocked_ids = special_token_ids - sentinel_token_ids
     
@@ -728,9 +644,8 @@ def load_model():
 # ==================== Streamlit UI ====================
 
 def main():
-    st.title("💬 Urdu Transformer Chatbot")
+    st.title("Urdu Transformer Chatbot")
     
-    # Initialize session state
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
     if "current_input" not in st.session_state:
@@ -742,17 +657,15 @@ def main():
     if "trigger_generation" not in st.session_state:
         st.session_state.trigger_generation = False
     
-    # Load model
     try:
         with st.spinner("Loading model..."):
             model, sp, special_token_ids, decode_blocked_ids = load_model()
-        st.success("✅ Model loaded successfully!")
+        st.success("Model loaded successfully!")
     except Exception as e:
-        st.error(f"❌ Error loading model: {str(e)}")
+        st.error(f"Error loading model: {str(e)}")
         return
     
-    # Sidebar settings
-    st.sidebar.header("⚙️ Settings")
+    st.sidebar.header("Settings")
     
     decoding_strategy = st.sidebar.selectbox(
         "Decoding Strategy",
@@ -762,48 +675,40 @@ def main():
     
     max_length = st.sidebar.slider("Max Length", 20, 100, 60)
     
-    # Strategy-specific parameters
     if decoding_strategy == "Beam Search":
         beam_width = st.sidebar.slider("Beam Width", 2, 5, 3)
     elif decoding_strategy == "Sampling":
         temperature = st.sidebar.slider("Temperature", 0.1, 2.0, 0.9, 0.1)
-        top_k = st.sidebar.slider("Top-K", 10, 100, 40)
-        repetition_penalty = st.sidebar.slider("Repetition Penalty", 1.0, 2.0, 1.2, 0.1)
-        no_repeat_ngram = st.sidebar.slider("No Repeat N-gram Size", 2, 5, 3)
     
-    # Clear history button
-    if st.sidebar.button("🗑️ Clear History"):
+    if st.sidebar.button("Clear History"):
         st.session_state.conversation_history = []
         st.session_state.current_input = ""
         st.session_state.is_generating = False
         st.session_state.pending_input = ""
         st.rerun()
     
-    # Main chat interface
     st.markdown("---")
     
-    # Display conversation history
     if st.session_state.conversation_history:
         st.markdown("### Conversation History")
         for i, (user_input, bot_response, strategy) in enumerate(st.session_state.conversation_history):
             st.markdown(f"""
             <div class="user-message">
-                <strong>👤 You ({strategy}):</strong><br>
+                <strong>You ({strategy}):</strong><br>
                 <span class="urdu-text">{user_input}</span>
             </div>
             """, unsafe_allow_html=True)
             
             st.markdown(f"""
             <div class="bot-message">
-                <strong>🤖 Bot:</strong><br>
+                <strong>Bot:</strong><br>
                 <span class="urdu-text">{bot_response}</span>
             </div>
             """, unsafe_allow_html=True)
         
         st.markdown("---")
     
-    # Example prompts
-    st.markdown("### 💡 Example Prompts")
+    st.markdown("### Example Prompts")
     
     example_prompts = [
         "ایک بہادر جرنیل دوسرے کی قدر جانتا ہے",
@@ -817,7 +722,7 @@ def main():
     cols = st.columns(3)
     for idx, example in enumerate(example_prompts):
         with cols[idx % 3]:
-            if st.button(f"📝 {example[:25]}..." if len(example) > 25 else f"📝 {example}", 
+            if st.button(f"{example[:25]}..." if len(example) > 25 else f"{example}", 
                         key=f"example_{idx}", 
                         use_container_width=True,
                         disabled=st.session_state.is_generating):
@@ -826,7 +731,6 @@ def main():
     
     st.markdown("---")
     
-    # Input area
     st.markdown("### Enter Your Message")
     
     col1, col2 = st.columns([4, 1])
@@ -840,72 +744,61 @@ def main():
             label_visibility="collapsed",
             disabled=st.session_state.is_generating
         )
-        # Update current_input when user types
         if user_input != st.session_state.current_input:
             st.session_state.current_input = user_input
     
     with col2:
-        generate_button = st.button("🚀 Generate", 
+        generate_button = st.button("Generate", 
                                     use_container_width=True,
                                     disabled=st.session_state.is_generating or not user_input.strip())
     
-    # Generate response with streaming
     if (generate_button and user_input.strip()) or (st.session_state.trigger_generation and st.session_state.current_input.strip()):
         
         if st.session_state.trigger_generation:
             user_input = st.session_state.current_input
             st.session_state.trigger_generation = False
 
-        # Store the input and clear the box
         st.session_state.pending_input = user_input
         st.session_state.current_input = ""
         st.session_state.is_generating = True
         
-        # Show user message immediately
         st.markdown(f"""
         <div class="user-message">
-            <strong>👤 You ({decoding_strategy}):</strong><br>
+            <strong>You ({decoding_strategy}):</strong><br>
             <span class="urdu-text">{st.session_state.pending_input}</span>
         </div>
         """, unsafe_allow_html=True)
         
-        # Create placeholder for streaming response
         response_placeholder = st.empty()
         full_response = ""
         
         try:
-            # Stream the response
             response_placeholder.markdown("""
             <div class="typing-animation">
-                <strong>🤖 Bot:</strong><br>
+                <strong>Bot:</strong><br>
                 <span class="urdu-text">جواب تیار ہو رہا ہے</span>
                 <span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>
             </div>
             """, unsafe_allow_html=True)
             
-            # Use streaming generation for Sampling strategy
             if decoding_strategy == "Sampling":
-                for decoded_text in streaming_generate(
-                    model, sp, st.session_state.pending_input, 
+                response_generator = streaming_generate(
+                    model, sp, st.session_state.pending_input,
                     max_len=max_length,
                     temperature=temperature,
-                    top_k=top_k,
-                    repetition_penalty=repetition_penalty,
-                    no_repeat_ngram_size=no_repeat_ngram,
                     special_token_ids=special_token_ids,
                     decode_blocked_ids=decode_blocked_ids
-                ):
+                )
+                for decoded_text in response_generator:
                     full_response = decoded_text
                     response_placeholder.markdown(f"""
                     <div class="bot-message">
-                        <strong>🤖 Bot:</strong><br>
+                        <strong>Bot:</strong><br>
                         <span class="urdu-text">{full_response}</span>
                     </div>
                     """, unsafe_allow_html=True)
-                    import time
-                    time.sleep(0.05)  # Small delay for visual effect
+                    time.sleep(0.05)
             else:
-                # For Greedy and Beam Search, generate all at once
                 if decoding_strategy == "Greedy":
                     full_response = greedy_generate(
                         model, sp, st.session_state.pending_input, 
@@ -913,7 +806,7 @@ def main():
                         special_token_ids=special_token_ids,
                         decode_blocked_ids=decode_blocked_ids
                     )
-                else:  # Beam Search
+                else:
                     full_response = beam_search_generate(
                         model, sp, st.session_state.pending_input, 
                         beam_width=beam_width,
@@ -924,27 +817,23 @@ def main():
                 
                 response_placeholder.markdown(f"""
                 <div class="bot-message">
-                    <strong>🤖 Bot:</strong><br>
+                    <strong>Bot:</strong><br>
                     <span class="urdu-text">{full_response}</span>
                 </div>
                 """, unsafe_allow_html=True)
             
-            # Add to conversation history
             st.session_state.conversation_history.append((st.session_state.pending_input, full_response, decoding_strategy))
             st.session_state.is_generating = False
             st.session_state.pending_input = ""
             
-            # Wait a moment then rerun to finalize
-            import time
             time.sleep(0.5)
             st.rerun()
             
         except Exception as e:
-            st.error(f"❌ Error generating response: {str(e)}")
+            st.error(f"Error generating response: {str(e)}")
             st.session_state.is_generating = False
             st.session_state.pending_input = ""
     
-    # Footer
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray; font-size: 14px;'>
