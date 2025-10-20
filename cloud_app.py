@@ -577,13 +577,17 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.9,
 
 @st.cache_resource
 def load_model():
-    """Load the trained model and tokenizer from Hugging Face Hub."""
-    repo_id = "hurairamuzammal/transformer_NLP_A02"
+    """Load the trained model and tokenizer."""
+    import requests
+    import tempfile
+    import os
+    
+    hf_repo_id = "hurairamuzammal/transformer_NLP_A02"
     config_filename = "cloud_config.json"
 
     # Download cloud_config.json from Hugging Face Hub
     config_path = hf_hub_download(
-        repo_id=repo_id,
+        repo_id=hf_repo_id,
         filename=config_filename
     )
 
@@ -596,15 +600,24 @@ def load_model():
     model_filename = config["model_bundle"]
     tokenizer_filename = config["tokenizer_file"]
 
-    # Download tokenizer and model files from Hugging Face Hub
-    tokenizer_path = hf_hub_download(
-        repo_id=repo_id,
-        filename=tokenizer_filename
-    )
+    # Download model file from Hugging Face Hub
     model_path = hf_hub_download(
-        repo_id=repo_id,
+        repo_id=hf_repo_id,
         filename=model_filename
     )
+    
+    # Download tokenizer from GitHub (since it's not on Hugging Face)
+    # Using the correct raw file URL format for GitHub
+    tokenizer_url = f"https://github.com/hurairamuzammal/NLP_A02_Transformer_from_Scratch_Using_Pytorch/raw/main/Model/{tokenizer_filename}"
+    
+    # Create a temporary file for the tokenizer
+    tokenizer_path = os.path.join(tempfile.gettempdir(), tokenizer_filename)
+    
+    # Download tokenizer from GitHub
+    response = requests.get(tokenizer_url)
+    response.raise_for_status()
+    with open(tokenizer_path, 'wb') as f:
+        f.write(response.content)
     
     sp = spm.SentencePieceProcessor()
     sp.load(str(tokenizer_path))
