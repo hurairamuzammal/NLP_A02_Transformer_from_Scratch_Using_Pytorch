@@ -649,7 +649,7 @@ def load_model():
     """Load the trained model and tokenizer."""
     
     repo_id = "hurairamuzammal/transformer_NLP_A02"
-    config_filename = "cloud_config.json"
+    config_filename = "model_config.json"
 
     # Download config file
     config_path = hf_hub_download(
@@ -662,7 +662,10 @@ def load_model():
         config = json.load(f)
     
     model_config = config["model_config"]
-    model_filename = config["model_bundle"]
+    # The model bundle in the config is "urdu_transformer_best.pth"
+    # but the file on the hub might have a different name if it was uploaded manually.
+    # Let's stick to the known filename.
+    model_filename = "urdu_transformer_best.pth" 
     tokenizer_filename = config["tokenizer_file"]
 
     # Download tokenizer and model files
