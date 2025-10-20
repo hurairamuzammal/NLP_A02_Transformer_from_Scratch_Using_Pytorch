@@ -675,25 +675,19 @@ def load_model():
     checkpoint = torch.hub.load_state_dict_from_url(model_url, map_location=device, progress=True)
     
     # Handle different checkpoint formats
-    if isinstance(checkpoint, dict):
-        if "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-        elif "model_state_dict" in checkpoint:
-            state_dict = checkpoint["model_state_dict"]
-        else:
-            # Assume the dict itself is the state dict
-            state_dict = checkpoint
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    elif isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif isinstance(checkpoint, dict):
+        state_dict = checkpoint
     else:
-        # Direct state dict
         state_dict = checkpoint
     
-    # Fix key names: decoder.layer.X -> decoder.layers.X
-    # This handles a mismatch between training and inference code
+    # Fix key names if necessary
     fixed_state_dict = {}
     for key, value in state_dict.items():
-        # Replace decoder.layer. with decoder.layers.
         new_key = key.replace("decoder.layer.", "decoder.layers.")
-        # Also handle encoder if needed
         new_key = new_key.replace("encoder.layer.", "encoder.layers.")
         fixed_state_dict[new_key] = value
     
