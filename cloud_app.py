@@ -467,7 +467,7 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
         actual_model = model
     
     with torch.no_grad():
-        # IMPORTANT: Include EOS token in source (as per notebook)
+        # Encode input text
         encoded = sp.encode(text, out_type=int)
         src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
@@ -481,33 +481,53 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
             logits = actual_model.generator(out[:, -1])
             
-            # Apply all filtering like in notebook
+            # Apply filtering
             filtered = logits.clone()
             if decode_blocked_ids:
                 filtered[:, list(decode_blocked_ids)] = float('-inf')
+            
+            # Block invalid tokens
+            filtered[:, sp.pad_id()] = float('-inf')
+            filtered[:, sp.unk_id()] = float('-inf')
+            
             filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
             filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
             
             if not torch.isfinite(filtered).any():
                 filtered = logits
+                filtered[:, sp.pad_id()] = float('-inf')
+                filtered[:, sp.unk_id()] = float('-inf')
             
             next_token = filtered.argmax(dim=-1).item()
             
-            if next_token == sp.eos_id():
+            # Safety check
+            if next_token == sp.eos_id() or next_token == sp.pad_id() or next_token == sp.unk_id():
+                break
+            
+            # Validate token is in vocabulary
+            if next_token < 0 or next_token >= len(sp):
                 break
 
             ys = torch.cat([ys, torch.tensor([[next_token]], device=device)], dim=1)
             generated_ids.append(next_token)
 
+    # Clean up generated IDs
     cleaned = []
     for idx in generated_ids:
-        if idx == sp.eos_id():
+        if idx == sp.eos_id() or idx == sp.pad_id() or idx == sp.unk_id():
             break
         if special_token_ids and idx in special_token_ids:
             continue
-        cleaned.append(idx)
+        if idx >= 0 and idx < len(sp):
+            cleaned.append(idx)
     
-    return sp.decode(cleaned).strip() if cleaned else ""
+    if not cleaned:
+        return ""
+    
+    try:
+        return sp.decode(cleaned).strip()
+    except:
+        return ""
 
 def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
     """Beam search generation matching notebook inference."""
