@@ -403,10 +403,61 @@ def _collect_special_token_ids(sp):
         sentinel_ids = set()
     return specials, sentinel_ids
 
+def _apply_repetition_penalty(logits, generated_ids, penalty, special_token_ids):
+    if penalty == 1.0 or not generated_ids:
+        return logits
+    unique_ids = set(generated_ids) - special_token_ids
+    for token_id in unique_ids:
+        value = logits[0, token_id]
+        if value < 0:
+            logits[0, token_id] *= penalty
+        else:
+            logits[0, token_id] /= penalty
+    return logits
+
+def _enforce_no_repeat_ngram(logits, generated_ids, ngram_size):
+    if ngram_size < 2 or len(generated_ids) < ngram_size - 1:
+        return logits
+    ngram_dict = {}
+    for index in range(len(generated_ids) - ngram_size + 1):
+        prefix = tuple(generated_ids[index:index + ngram_size - 1])
+        next_token = generated_ids[index + ngram_size - 1]
+        ngram_dict.setdefault(prefix, set()).add(next_token)
+    prefix = tuple(generated_ids[-(ngram_size - 1):])
+    banned = ngram_dict.get(prefix)
+    if banned:
+        logits[0, list(banned)] = float('-inf')
+    return logits
+
+def _top_k_filtering(logits, top_k):
+    if top_k is None or top_k <= 0 or top_k >= logits.size(-1):
+        return logits
+    top_values, _ = torch.topk(logits, top_k)
+    threshold = top_values[..., -1, None]
+    logits[logits < threshold] = float('-inf')
+    return logits
+
+def _sample_next_token(logits, generated_ids, *, temperature, top_k, repetition_penalty, no_repeat_ngram_size, special_token_ids, decode_blocked_ids):
+    filtered = logits.clone()
+    if decode_blocked_ids:
+        filtered[:, list(decode_blocked_ids)] = float('-inf')
+    filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
+    filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
+    filtered = _top_k_filtering(filtered, top_k)
+    if not torch.isfinite(filtered).any():
+        filtered = logits
+    if temperature is not None and temperature > 0 and temperature != 1.0:
+        filtered = filtered / temperature
+    probs = torch.softmax(filtered, dim=-1)
+    if torch.isnan(probs).any():
+        probs = torch.softmax(logits, dim=-1)
+    next_token = torch.multinomial(probs, num_samples=1)
+    return next_token.item()
+
 # ==================== Generation Functions ====================
 
-def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_blocked_ids=None):
-    """Greedy generation for causal language model."""
+def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
+    """Greedy generation matching notebook inference."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -416,9 +467,9 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
         actual_model = model
     
     with torch.no_grad():
-        # Encode the prompt (no EOS at end for causal continuation)
-        tokens = sp.encode(text, out_type=int)
-        src = torch.tensor([sp.bos_id()] + tokens, device=device).unsqueeze(0)
+        # IMPORTANT: Include EOS token in source (as per notebook)
+        encoded = sp.encode(text, out_type=int)
+        src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
         memory = actual_model.encode(src, src_mask)
 
@@ -430,17 +481,20 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
             logits = actual_model.generator(out[:, -1])
             
+            # Apply all filtering like in notebook
+            filtered = logits.clone()
             if decode_blocked_ids:
-                logits[:, list(decode_blocked_ids)] = float('-inf')
+                filtered[:, list(decode_blocked_ids)] = float('-inf')
+            filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
+            filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
             
-            next_token = logits.argmax(dim=-1).item()
+            if not torch.isfinite(filtered).any():
+                filtered = logits
+            
+            next_token = filtered.argmax(dim=-1).item()
             
             if next_token == sp.eos_id():
                 break
-            
-            # Skip pad and unk tokens
-            if next_token in [sp.pad_id(), sp.unk_id()]:
-                continue
 
             ys = torch.cat([ys, torch.tensor([[next_token]], device=device)], dim=1)
             generated_ids.append(next_token)
@@ -455,8 +509,8 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_token_ids=None, decode_blocked_ids=None):
-    """Beam search generation for causal language model."""
+def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
+    """Beam search generation matching notebook inference."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -466,20 +520,20 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
         actual_model = model
     
     with torch.no_grad():
-        # Encode the prompt (no EOS at end for causal continuation)
-        tokens = sp.encode(text, out_type=int)
-        src = torch.tensor([sp.bos_id()] + tokens, device=device).unsqueeze(0)
+        # IMPORTANT: Include EOS token in source (as per notebook)
+        encoded = sp.encode(text, out_type=int)
+        src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
         memory = actual_model.encode(src, src_mask)
 
-        beams = [([sp.bos_id()], 0.0)]
+        beams = [([sp.bos_id()], 0.0, [])]
         
         for _ in range(max_len):
             candidates = []
             
-            for seq, score in beams:
+            for seq, score, gen_ids in beams:
                 if seq[-1] == sp.eos_id():
-                    candidates.append((seq, score))
+                    candidates.append((seq, score, gen_ids))
                     continue
                 
                 ys = torch.tensor([seq], device=device)
@@ -487,26 +541,31 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
                 out = actual_model.decode(memory, src_mask, ys, tgt_mask)
                 logits = actual_model.generator(out[:, -1])
                 
+                # Apply all filtering like in notebook
+                filtered = logits.clone()
                 if decode_blocked_ids:
-                    logits[:, list(decode_blocked_ids)] = float('-inf')
+                    filtered[:, list(decode_blocked_ids)] = float('-inf')
+                filtered = _apply_repetition_penalty(filtered, gen_ids, repetition_penalty, special_token_ids)
+                filtered = _enforce_no_repeat_ngram(filtered, gen_ids, no_repeat_ngram_size)
                 
-                # Block pad and unk tokens
-                logits[:, [sp.pad_id(), sp.unk_id()]] = float('-inf')
+                if not torch.isfinite(filtered).any():
+                    filtered = logits
                 
-                log_probs = torch.log_softmax(logits, dim=-1)
+                log_probs = torch.log_softmax(filtered, dim=-1)
                 top_probs, top_indices = torch.topk(log_probs[0], beam_width)
                 
                 for prob, idx in zip(top_probs, top_indices):
                     new_seq = seq + [idx.item()]
+                    new_gen_ids = gen_ids + [idx.item()]
                     new_score = score + prob.item()
-                    candidates.append((new_seq, new_score))
+                    candidates.append((new_seq, new_score, new_gen_ids))
             
             beams = sorted(candidates, key=lambda x: x[1], reverse=True)[:beam_width]
             
-            if all(seq[-1] == sp.eos_id() for seq, _ in beams):
+            if all(seq[-1] == sp.eos_id() for seq, _, _ in beams):
                 break
         
-        best_seq, _ = beams[0]
+        best_seq, _, _ = beams[0]
         generated_ids = best_seq[1:]
         
     cleaned = []
@@ -519,9 +578,9 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def sampling_generate(model, sp, text, max_len=60, temperature=0.8, 
-                     special_token_ids=None, decode_blocked_ids=None):
-    """Sampling generation for causal language model with temperature and top-k."""
+def sampling_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
+                     special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
+    """Sampling generation matching notebook inference."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -531,9 +590,9 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.8,
         actual_model = model
     
     with torch.no_grad():
-        # Encode the prompt (no EOS at end for causal continuation)
-        tokens = sp.encode(text, out_type=int)
-        src = torch.tensor([sp.bos_id()] + tokens, device=device).unsqueeze(0)
+        # IMPORTANT: Include EOS token in source (as per notebook)
+        encoded = sp.encode(text, out_type=int)
+        src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
         memory = actual_model.encode(src, src_mask)
 
@@ -545,20 +604,17 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.8,
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
             logits = actual_model.generator(out[:, -1])
             
-            # Block special tokens
-            if decode_blocked_ids:
-                logits[:, list(decode_blocked_ids)] = float('-inf')
-            
-            # Block pad and unk tokens
-            logits[:, [sp.pad_id(), sp.unk_id()]] = float('-inf')
-            
-            # Apply temperature
-            if temperature != 1.0:
-                logits = logits / temperature
-            
-            # Sample from the distribution
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1).item()
+            # Use the full sampling function from notebook
+            next_token = _sample_next_token(
+                logits,
+                generated_ids,
+                temperature=temperature,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                special_token_ids=special_token_ids,
+                decode_blocked_ids=decode_blocked_ids
+            )
             
             if next_token == sp.eos_id():
                 break
@@ -576,9 +632,9 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.8,
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def streaming_generate(model, sp, text, max_len=60, temperature=0.8, 
-                      special_token_ids=None, decode_blocked_ids=None):
-    """Streaming generation for causal language model - yields tokens as they're generated."""
+def streaming_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
+                      special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
+    """Streaming generation matching notebook inference."""
     model.eval()
     device = next(model.parameters()).device
     
@@ -588,9 +644,9 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.8,
         actual_model = model
     
     with torch.no_grad():
-        # Encode the prompt (no EOS at end for causal continuation)
-        tokens = sp.encode(text, out_type=int)
-        src = torch.tensor([sp.bos_id()] + tokens, device=device).unsqueeze(0)
+        # IMPORTANT: Include EOS token in source (as per notebook)
+        encoded = sp.encode(text, out_type=int)
+        src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
         memory = actual_model.encode(src, src_mask)
 
@@ -602,20 +658,17 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.8,
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
             logits = actual_model.generator(out[:, -1])
             
-            # Block special tokens
-            if decode_blocked_ids:
-                logits[:, list(decode_blocked_ids)] = float('-inf')
-            
-            # Block pad and unk tokens
-            logits[:, [sp.pad_id(), sp.unk_id()]] = float('-inf')
-            
-            # Apply temperature
-            if temperature != 1.0:
-                logits = logits / temperature
-            
-            # Sample from the distribution
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1).item()
+            # Use the full sampling function from notebook
+            next_token = _sample_next_token(
+                logits,
+                generated_ids,
+                temperature=temperature,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                special_token_ids=special_token_ids,
+                decode_blocked_ids=decode_blocked_ids
+            )
             
             if next_token == sp.eos_id():
                 break
@@ -746,7 +799,10 @@ def main():
     if decoding_strategy == "Beam Search":
         beam_width = st.sidebar.slider("Beam Width", 2, 5, 3)
     elif decoding_strategy == "Sampling":
-        temperature = st.sidebar.slider("Temperature", 0.1, 2.0, 0.8, 0.1)
+        temperature = st.sidebar.slider("Temperature", 0.01, 2.0, 0.1, 0.01)
+    
+    repetition_penalty = st.sidebar.slider("Repetition Penalty", 1.0, 2.0, 1.0, 0.1)
+    no_repeat_ngram_size = st.sidebar.slider("No Repeat N-gram Size", 0, 5, 3)
     
     if st.sidebar.button("Clear History"):
         st.session_state.conversation_history = []
@@ -851,8 +907,11 @@ def main():
                     model, sp, st.session_state.pending_input,
                     max_len=max_length,
                     temperature=temperature,
+                    top_k=40,
                     special_token_ids=special_token_ids,
-                    decode_blocked_ids=decode_blocked_ids
+                    decode_blocked_ids=decode_blocked_ids,
+                    repetition_penalty=repetition_penalty,
+                    no_repeat_ngram_size=no_repeat_ngram_size
                 )
                 for decoded_text in response_generator:
                     full_response = decoded_text
@@ -869,7 +928,9 @@ def main():
                         model, sp, st.session_state.pending_input, 
                         max_len=max_length,
                         special_token_ids=special_token_ids,
-                        decode_blocked_ids=decode_blocked_ids
+                        decode_blocked_ids=decode_blocked_ids,
+                        repetition_penalty=repetition_penalty,
+                        no_repeat_ngram_size=no_repeat_ngram_size
                     )
                 else:
                     full_response = beam_search_generate(
@@ -877,7 +938,9 @@ def main():
                         beam_width=beam_width,
                         max_len=max_length,
                         special_token_ids=special_token_ids,
-                        decode_blocked_ids=decode_blocked_ids
+                        decode_blocked_ids=decode_blocked_ids,
+                        repetition_penalty=repetition_penalty,
+                        no_repeat_ngram_size=no_repeat_ngram_size
                     )
                 
                 response_placeholder.markdown(f"""

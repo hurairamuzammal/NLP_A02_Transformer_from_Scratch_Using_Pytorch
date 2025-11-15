@@ -7,12 +7,14 @@
     "N": 2,
     "d_model": 512,
     "d_ff": 2048,
-    "h": 8,
+    "h": 16,
     "dropout": 0.1
   },
   "generation_config": {
     "max_len": 60,
-    "temperature": 0.8,
-    "top_k": 40
+    "temperature": 0.1,
+    "top_k": 40,
+    "repetition_penalty": 1.0,
+    "no_repeat_ngram_size": 3
   }
 }
