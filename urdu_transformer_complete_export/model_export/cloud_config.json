@@ -1,0 +1,18 @@
+{
+  "model_bundle": "urdu_transformer_causal.pt",
+  "tokenizer_file": "urdu_tokenizer.model",
+  "model_config": {
+    "src_vocab": 10000,
+    "tgt_vocab": 10000,
+    "N": 2,
+    "d_model": 512,
+    "d_ff": 2048,
+    "h": 8,
+    "dropout": 0.1
+  },
+  "generation_config": {
+    "max_len": 60,
+    "temperature": 0.8,
+    "top_k": 40
+  }
+}
