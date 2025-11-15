@@ -1,0 +1,47 @@
+{
+  "model_architecture": {
+    "src_vocab": 10000,
+    "tgt_vocab": 10000,
+    "N": 2,
+    "d_model": 512,
+    "d_ff": 2048,
+    "h": 8,
+    "dropout": 0.1
+  },
+  "training_info": {
+    "t5_epochs": 15,
+    "t5_best_val_loss": -0.7816894128187439,
+    "causal_epochs": 50,
+    "causal_best_val_loss": -0.42686157316208817,
+    "tokenizer_vocab_size": 10000,
+    "dataset_size": 20044,
+    "train_size": 16035,
+    "val_size": 2004,
+    "test_size": 2005
+  },
+  "evaluation_metrics": {
+    "t5_model": {
+      "bleu": 0.0,
+      "rougeL": 0.0,
+      "token_accuracy": 0.19642857142857145,
+      "word_overlap": 0.0,
+      "char_similarity": 0.0,
+      "length_ratio": 2.7441666666666666
+    },
+    "causal_model": {
+      "bleu": 0.0,
+      "rougeL": 0.0,
+      "token_accuracy": 52.00046922032215,
+      "word_overlap": 53.85733318968613,
+      "char_similarity": 33.15673798560603,
+      "length_ratio": 32.17166468582218
+    },
+    "t5_perplexity": 2477.9127450257592,
+    "causal_perplexity": 1657.2748792123223
+  },
+  "export_info": {
+    "export_date": "2025-11-15T09:40:26.415116",
+    "framework": "PyTorch",
+    "python_version": "3.10+"
+  }
+}
