@@ -22,33 +22,121 @@ st.markdown("""
         font-size: 18px;
         line-height: 2;
     }
+    
+    /* Light mode styles */
+    [data-testid="stAppViewContainer"][data-theme="light"] .user-message {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 15px;
+        margin: 10px 0;
+        direction: rtl;
+        text-align: right;
+        animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    [data-testid="stAppViewContainer"][data-theme="light"] .bot-message {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 15px;
+        margin: 10px 0;
+        direction: rtl;
+        text-align: right;
+        animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    [data-testid="stAppViewContainer"][data-theme="light"] .typing-animation {
+        background: linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%);
+        color: #333;
+        padding: 15px;
+        border-radius: 15px;
+        margin: 10px 0;
+        direction: rtl;
+        text-align: right;
+        animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Dark mode styles */
+    [data-testid="stAppViewContainer"][data-theme="dark"] .user-message {
+        background: linear-gradient(135deg, #434343 0%, #000000 100%);
+        color: #e0e0e0;
+        padding: 15px;
+        border-radius: 15px;
+        margin: 10px 0;
+        direction: rtl;
+        text-align: right;
+        animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(255, 255, 255, 0.1);
+        border: 1px solid #555;
+    }
+    
+    [data-testid="stAppViewContainer"][data-theme="dark"] .bot-message {
+        background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+        color: #ecf0f1;
+        padding: 15px;
+        border-radius: 15px;
+        margin: 10px 0;
+        direction: rtl;
+        text-align: right;
+        animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(255, 255, 255, 0.1);
+        border: 1px solid #3498db;
+    }
+    
+    [data-testid="stAppViewContainer"][data-theme="dark"] .typing-animation {
+        background: linear-gradient(135deg, #232526 0%, #414345 100%);
+        color: #bdc3c7;
+        padding: 15px;
+        border-radius: 15px;
+        margin: 10px 0;
+        direction: rtl;
+        text-align: right;
+        animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(255, 255, 255, 0.1);
+        border: 1px solid #555;
+    }
+    
+    /* Default fallback (light mode) */
     .user-message {
-        background-color: #e3f2fd;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
         padding: 15px;
-        border-radius: 10px;
+        border-radius: 15px;
         margin: 10px 0;
         direction: rtl;
         text-align: right;
         animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
+    
     .bot-message {
-        background-color: #f5f5f5;
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
         padding: 15px;
-        border-radius: 10px;
+        border-radius: 15px;
         margin: 10px 0;
         direction: rtl;
         text-align: right;
         animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
+    
     .typing-animation {
-        background-color: #f5f5f5;
+        background: linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%);
+        color: #333;
         padding: 15px;
-        border-radius: 10px;
+        border-radius: 15px;
         margin: 10px 0;
         direction: rtl;
         text-align: right;
         animation: slideInRight 0.5s ease-out;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
+    
     .typing-dots {
         display: inline-block;
         direction: ltr;
