@@ -10,7 +10,7 @@ import time
 from huggingface_hub import hf_hub_download
 
 st.set_page_config(
-    page_title="Urdu Transformer Chatbot - Causal LM",
+    page_title="Urdu Transformer based Chatbot ",
     layout="wide"
 )
 

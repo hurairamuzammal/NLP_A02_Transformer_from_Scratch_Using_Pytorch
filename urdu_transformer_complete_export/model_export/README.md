@@ -1,6 +1,6 @@
 # Urdu Transformer Models - Export Package
 
-**Export Date:** 2025-11-15 09:40:27
+**Export Date:** 2025-11-15 11:45:41
 
 ## Package Contents
 
@@ -9,13 +9,13 @@ This package contains two trained transformer models for Urdu language processin
 ### 1. T5-Style Span Corruption Model
 - **File:** `urdu_transformer_t5.pt`
 - **Training Method:** T5-style span corruption (denoising)
-- **Best Validation Loss:** -0.7817
+- **Best Validation Loss:** -0.7807
 - **Epochs Trained:** 15
 
 ### 2. Causal Language Model
 - **File:** `urdu_transformer_causal.pt`
 - **Training Method:** Causal language modeling (GPT-style)
-- **Best Validation Loss:** -0.4269
+- **Best Validation Loss:** -0.3331
 - **Epochs Trained:** 50
 - **Pre-trained From:** T5 model
 
@@ -47,12 +47,12 @@ This package contains two trained transformer models for Urdu language processin
 ## Evaluation Metrics
 
 ### T5 Model
-- **Perplexity:** 2477.9127
-- **Custom Score:** 0.74%
+- **Perplexity:** 2662.1771
+- **Custom Score:** 6.14%
 
 ### Causal Model
-- **Perplexity:** 1657.2749
-- **Custom Score:** 42.80%
+- **Perplexity:** 1648.4917
+- **Custom Score:** 46.66%
 
 ## Usage
 
@@ -115,4 +115,4 @@ See LICENSE file for details.
 
 ---
 
-Generated on 2025-11-15 09:40:27
+Generated on 2025-11-15 11:45:41
