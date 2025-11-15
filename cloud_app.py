@@ -621,14 +621,15 @@ def load_model():
 
 # ==================== Streamlit UI ====================
 
+def set_input_text(text):
+    st.session_state.user_input_field = text
+
 def main():
     st.title("🤖 Urdu Transformer Chatbot (Causal Language Model)")
     st.markdown("*A causal language model that continues your Urdu text prompts*")
     
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
-    if "current_input" not in st.session_state:
-        st.session_state.current_input = ""
     if "is_generating" not in st.session_state:
         st.session_state.is_generating = False
     if "pending_input" not in st.session_state:
@@ -661,9 +662,10 @@ def main():
     
     if st.sidebar.button("Clear History"):
         st.session_state.conversation_history = []
-        st.session_state.current_input = ""
         st.session_state.is_generating = False
         st.session_state.pending_input = ""
+        if "user_input_field" in st.session_state:
+            st.session_state.user_input_field = ""
         st.rerun()
     
     st.markdown("---")
@@ -701,12 +703,12 @@ def main():
     cols = st.columns(3)
     for idx, example in enumerate(example_prompts):
         with cols[idx % 3]:
-            if st.button(f"{example[:25]}..." if len(example) > 25 else f"{example}", 
+            st.button(f"{example[:25]}..." if len(example) > 25 else f"{example}", 
                         key=f"example_{idx}", 
                         use_container_width=True,
-                        disabled=st.session_state.is_generating):
-                st.session_state.current_input = example
-                st.session_state.trigger_generation = True
+                        on_click=set_input_text,
+                        args=(example,),
+                        disabled=st.session_state.is_generating)
     
     st.markdown("---")
     
@@ -717,29 +719,25 @@ def main():
     with col1:
         user_input = st.text_input(
             "Type in Urdu",
-            value=st.session_state.current_input,
             placeholder="یہاں اردو میں لکھیں...",
             key="user_input_field",
             label_visibility="collapsed",
             disabled=st.session_state.is_generating
         )
-        if user_input != st.session_state.current_input:
-            st.session_state.current_input = user_input
     
     with col2:
         generate_button = st.button("Generate", 
                                     use_container_width=True,
-                                    disabled=st.session_state.is_generating or not user_input.strip())
+                                    disabled=st.session_state.is_generating or not (user_input and user_input.strip()))
     
-    if (generate_button and user_input.strip()) or (st.session_state.trigger_generation and st.session_state.current_input.strip()):
+    if (generate_button and user_input and user_input.strip()):
         
-        if st.session_state.trigger_generation:
-            user_input = st.session_state.current_input
-            st.session_state.trigger_generation = False
-
         st.session_state.pending_input = user_input
-        st.session_state.current_input = ""
         st.session_state.is_generating = True
+        st.rerun()
+
+    if st.session_state.is_generating:
+        user_input = st.session_state.pending_input
         
         st.markdown(f"""
         <div class="user-message">
@@ -812,6 +810,7 @@ def main():
             st.error(f"Error generating response: {str(e)}")
             st.session_state.is_generating = False
             st.session_state.pending_input = ""
+            st.rerun()
     
     st.markdown("---")
     st.markdown("""
