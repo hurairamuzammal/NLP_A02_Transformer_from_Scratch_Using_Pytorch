@@ -437,20 +437,40 @@ def _top_k_filtering(logits, top_k):
     logits[logits < threshold] = float('-inf')
     return logits
 
-def _sample_next_token(logits, generated_ids, *, temperature, top_k, repetition_penalty, no_repeat_ngram_size, special_token_ids, decode_blocked_ids):
+def _sample_next_token(logits, generated_ids, *, temperature, top_k, repetition_penalty, no_repeat_ngram_size, special_token_ids, decode_blocked_ids, vocab_size):
     filtered = logits.clone()
+    
+    # Block all special tokens
     if decode_blocked_ids:
         filtered[:, list(decode_blocked_ids)] = float('-inf')
+    
+    # Block tokens beyond vocabulary size (safety check)
+    if vocab_size and filtered.size(-1) > vocab_size:
+        filtered[:, vocab_size:] = float('-inf')
+    
     filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
     filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
     filtered = _top_k_filtering(filtered, top_k)
+    
     if not torch.isfinite(filtered).any():
         filtered = logits
+        # Still block special tokens even in fallback
+        if decode_blocked_ids:
+            filtered[:, list(decode_blocked_ids)] = float('-inf')
+    
     if temperature is not None and temperature > 0 and temperature != 1.0:
         filtered = filtered / temperature
+    
     probs = torch.softmax(filtered, dim=-1)
     if torch.isnan(probs).any():
         probs = torch.softmax(logits, dim=-1)
+        # Block special tokens in probs
+        if decode_blocked_ids:
+            for token_id in decode_blocked_ids:
+                probs[:, token_id] = 0.0
+        # Renormalize
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+    
     next_token = torch.multinomial(probs, num_samples=1)
     return next_token.item()
 
