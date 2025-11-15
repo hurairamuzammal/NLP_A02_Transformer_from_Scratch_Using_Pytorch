@@ -7,10 +7,9 @@ import math
 from pathlib import Path
 import copy
 import time
-from huggingface_hub import hf_hub_download
 
 st.set_page_config(
-    page_title="Urdu Transformer based Chatbot ",
+    page_title="Urdu Transformer Chatbot",
     layout="wide"
 )
 
@@ -406,7 +405,8 @@ def _collect_special_token_ids(sp):
 def _apply_repetition_penalty(logits, generated_ids, penalty, special_token_ids):
     if penalty == 1.0 or not generated_ids:
         return logits
-    unique_ids = set(generated_ids) - special_token_ids
+    safe_specials = special_token_ids or set()
+    unique_ids = set(generated_ids) - safe_specials
     for token_id in unique_ids:
         value = logits[0, token_id]
         if value < 0:
@@ -437,27 +437,34 @@ def _top_k_filtering(logits, top_k):
     logits[logits < threshold] = float('-inf')
     return logits
 
-def _sample_next_token(logits, generated_ids, *, temperature, top_k, repetition_penalty, no_repeat_ngram_size, special_token_ids, decode_blocked_ids):
+def _sample_next_token(
+    logits,
+    generated_ids,
+    *,
+    temperature,
+    special_token_ids=None,
+    decode_blocked_ids=None,
+):
     filtered = logits.clone()
     if decode_blocked_ids:
         filtered[:, list(decode_blocked_ids)] = float('-inf')
-    filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
-    filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
-    filtered = _top_k_filtering(filtered, top_k)
+
     if not torch.isfinite(filtered).any():
         filtered = logits
+
     if temperature is not None and temperature > 0 and temperature != 1.0:
         filtered = filtered / temperature
+
     probs = torch.softmax(filtered, dim=-1)
     if torch.isnan(probs).any():
         probs = torch.softmax(logits, dim=-1)
+
     next_token = torch.multinomial(probs, num_samples=1)
     return next_token.item()
 
 # ==================== Generation Functions ====================
 
-def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
-    """Greedy generation matching notebook inference."""
+def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_blocked_ids=None):
     model.eval()
     device = next(model.parameters()).device
     
@@ -467,7 +474,6 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
         actual_model = model
     
     with torch.no_grad():
-        # IMPORTANT: Include EOS token in source (as per notebook)
         encoded = sp.encode(text, out_type=int)
         src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
@@ -479,19 +485,12 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
         for _ in range(max_len):
             tgt_mask = subsequent_mask(ys.size(1)).to(device)
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
-            logits = actual_model.generator(out[:, -1])
+            next_log_probs = actual_model.generator(out[:, -1])
             
-            # Apply all filtering like in notebook
-            filtered = logits.clone()
             if decode_blocked_ids:
-                filtered[:, list(decode_blocked_ids)] = float('-inf')
-            filtered = _apply_repetition_penalty(filtered, generated_ids, repetition_penalty, special_token_ids)
-            filtered = _enforce_no_repeat_ngram(filtered, generated_ids, no_repeat_ngram_size)
+                next_log_probs[:, list(decode_blocked_ids)] = float('-inf')
             
-            if not torch.isfinite(filtered).any():
-                filtered = logits
-            
-            next_token = filtered.argmax(dim=-1).item()
+            next_token = next_log_probs.argmax(dim=-1).item()
             
             if next_token == sp.eos_id():
                 break
@@ -509,8 +508,7 @@ def greedy_generate(model, sp, text, max_len=60, special_token_ids=None, decode_
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
-    """Beam search generation matching notebook inference."""
+def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_token_ids=None, decode_blocked_ids=None):
     model.eval()
     device = next(model.parameters()).device
     
@@ -520,52 +518,42 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
         actual_model = model
     
     with torch.no_grad():
-        # IMPORTANT: Include EOS token in source (as per notebook)
         encoded = sp.encode(text, out_type=int)
         src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
         memory = actual_model.encode(src, src_mask)
 
-        beams = [([sp.bos_id()], 0.0, [])]
+        beams = [([sp.bos_id()], 0.0)]
         
         for _ in range(max_len):
             candidates = []
             
-            for seq, score, gen_ids in beams:
+            for seq, score in beams:
                 if seq[-1] == sp.eos_id():
-                    candidates.append((seq, score, gen_ids))
+                    candidates.append((seq, score))
                     continue
                 
                 ys = torch.tensor([seq], device=device)
                 tgt_mask = subsequent_mask(ys.size(1)).to(device)
                 out = actual_model.decode(memory, src_mask, ys, tgt_mask)
-                logits = actual_model.generator(out[:, -1])
+                next_log_probs = actual_model.generator(out[:, -1])
                 
-                # Apply all filtering like in notebook
-                filtered = logits.clone()
                 if decode_blocked_ids:
-                    filtered[:, list(decode_blocked_ids)] = float('-inf')
-                filtered = _apply_repetition_penalty(filtered, gen_ids, repetition_penalty, special_token_ids)
-                filtered = _enforce_no_repeat_ngram(filtered, gen_ids, no_repeat_ngram_size)
+                    next_log_probs[:, list(decode_blocked_ids)] = float('-inf')
                 
-                if not torch.isfinite(filtered).any():
-                    filtered = logits
-                
-                log_probs = torch.log_softmax(filtered, dim=-1)
-                top_probs, top_indices = torch.topk(log_probs[0], beam_width)
+                top_probs, top_indices = torch.topk(next_log_probs[0], beam_width)
                 
                 for prob, idx in zip(top_probs, top_indices):
                     new_seq = seq + [idx.item()]
-                    new_gen_ids = gen_ids + [idx.item()]
                     new_score = score + prob.item()
-                    candidates.append((new_seq, new_score, new_gen_ids))
+                    candidates.append((new_seq, new_score))
             
             beams = sorted(candidates, key=lambda x: x[1], reverse=True)[:beam_width]
             
-            if all(seq[-1] == sp.eos_id() for seq, _, _ in beams):
+            if all(seq[-1] == sp.eos_id() for seq, _ in beams):
                 break
         
-        best_seq, _, _ = beams[0]
+        best_seq, _ = beams[0]
         generated_ids = best_seq[1:]
         
     cleaned = []
@@ -578,9 +566,8 @@ def beam_search_generate(model, sp, text, beam_width=3, max_len=60, special_toke
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def sampling_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
-                     special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
-    """Sampling generation matching notebook inference."""
+def sampling_generate(model, sp, text, max_len=60, temperature=0.9, 
+                     special_token_ids=None, decode_blocked_ids=None):
     model.eval()
     device = next(model.parameters()).device
     
@@ -590,7 +577,6 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
         actual_model = model
     
     with torch.no_grad():
-        # IMPORTANT: Include EOS token in source (as per notebook)
         encoded = sp.encode(text, out_type=int)
         src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
@@ -602,18 +588,14 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
         for _ in range(max_len):
             tgt_mask = subsequent_mask(ys.size(1)).to(device)
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
-            logits = actual_model.generator(out[:, -1])
+            next_log_probs = actual_model.generator(out[:, -1])
             
-            # Use the full sampling function from notebook
             next_token = _sample_next_token(
-                logits,
+                next_log_probs,
                 generated_ids,
                 temperature=temperature,
-                top_k=top_k,
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
                 special_token_ids=special_token_ids,
-                decode_blocked_ids=decode_blocked_ids
+                decode_blocked_ids=decode_blocked_ids,
             )
             
             if next_token == sp.eos_id():
@@ -632,9 +614,8 @@ def sampling_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
     
     return sp.decode(cleaned).strip() if cleaned else ""
 
-def streaming_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
-                      special_token_ids=None, decode_blocked_ids=None, repetition_penalty=1.0, no_repeat_ngram_size=3):
-    """Streaming generation matching notebook inference."""
+def streaming_generate(model, sp, text, max_len=60, temperature=0.9, 
+                      special_token_ids=None, decode_blocked_ids=None):
     model.eval()
     device = next(model.parameters()).device
     
@@ -644,7 +625,6 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
         actual_model = model
     
     with torch.no_grad():
-        # IMPORTANT: Include EOS token in source (as per notebook)
         encoded = sp.encode(text, out_type=int)
         src = torch.tensor([sp.bos_id()] + encoded + [sp.eos_id()], device=device).unsqueeze(0)
         src_mask = (src != sp.pad_id()).unsqueeze(-2)
@@ -656,18 +636,14 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
         for _ in range(max_len):
             tgt_mask = subsequent_mask(ys.size(1)).to(device)
             out = actual_model.decode(memory, src_mask, ys, tgt_mask)
-            logits = actual_model.generator(out[:, -1])
+            next_log_probs = actual_model.generator(out[:, -1])
             
-            # Use the full sampling function from notebook
             next_token = _sample_next_token(
-                logits,
+                next_log_probs,
                 generated_ids,
                 temperature=temperature,
-                top_k=top_k,
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
                 special_token_ids=special_token_ids,
-                decode_blocked_ids=decode_blocked_ids
+                decode_blocked_ids=decode_blocked_ids,
             )
             
             if next_token == sp.eos_id():
@@ -676,7 +652,6 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
             ys = torch.cat([ys, torch.tensor([[next_token]], device=device)], dim=1)
             generated_ids.append(next_token)
             
-            # Yield the decoded text so far
             cleaned_ids = []
             for idx in generated_ids:
                 if special_token_ids and idx in special_token_ids:
@@ -689,45 +664,17 @@ def streaming_generate(model, sp, text, max_len=60, temperature=0.1, top_k=40,
 
 @st.cache_resource
 def load_model():
-    """Load the trained causal model and tokenizer from Hugging Face Hub."""
+    model_dir = Path("Model")
     
-    hf_repo_id = "hurairamuzammal/transformer_NLP_A02"
-    config_filename = "cloud_config.json"
-
-    # Download cloud_config.json from Hugging Face Hub
-    config_path = hf_hub_download(
-        repo_id=hf_repo_id,
-        filename=config_filename
-    )
-
-    # Load config
-    with open(config_path, "r") as f:
+    with open(model_dir / "model_config.json", "r") as f:
         config = json.load(f)
     
     model_config = config["model_config"]
-    # Get filenames from cloud_config.json - use CAUSAL model
-    model_filename = config["model_bundle"]  # urdu_transformer_causal.pt
-    tokenizer_filename = config["tokenizer_file"]
-
-    # Download tokenizer from Hugging Face Hub
-    tokenizer_path = hf_hub_download(
-        repo_id=hf_repo_id,
-        filename=tokenizer_filename
-    )
     
-    # Download model file from Hugging Face Hub
-    model_path = hf_hub_download(
-        repo_id=hf_repo_id,
-        filename=model_filename
-    )
-    
-    # Load tokenizer
     sp = spm.SentencePieceProcessor()
-    sp.load(str(tokenizer_path))
+    sp.load(str(model_dir / config["tokenizer_file"]))
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Create model with correct architecture
     model = make_model(
         src_vocab=model_config["src_vocab"],
         tgt_vocab=model_config["tgt_vocab"],
@@ -738,19 +685,25 @@ def load_model():
         dropout=model_config["dropout"]
     )
     
-    # Load the checkpoint
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_dir / config["model_bundle"], map_location=device)
     
-    # Extract state dict from checkpoint
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    elif isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        state_dict = checkpoint["model_state_dict"]
+    if isinstance(checkpoint, dict):
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        elif "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+        else:
+            state_dict = checkpoint
     else:
         state_dict = checkpoint
     
-    # Load state dict into model
-    model.load_state_dict(state_dict, strict=False)
+    fixed_state_dict = {}
+    for key, value in state_dict.items():
+        new_key = key.replace("decoder.layer.", "decoder.layers.")
+        new_key = new_key.replace("encoder.layer.", "encoder.layers.")
+        fixed_state_dict[new_key] = value
+    
+    model.load_state_dict(fixed_state_dict)
     
     model.to(device)
     model.eval()
@@ -767,7 +720,6 @@ def set_input_text(text):
 
 def main():
     st.title("Urdu Transformer Chatbot")
-    st.markdown("*Using causal language modeling approach that continues your Urdu text prompts*")
     
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
@@ -799,10 +751,7 @@ def main():
     if decoding_strategy == "Beam Search":
         beam_width = st.sidebar.slider("Beam Width", 2, 5, 3)
     elif decoding_strategy == "Sampling":
-        temperature = st.sidebar.slider("Temperature", 0.01, 2.0, 0.1, 0.01)
-    
-    repetition_penalty = st.sidebar.slider("Repetition Penalty", 1.0, 2.0, 1.0, 0.1)
-    no_repeat_ngram_size = st.sidebar.slider("No Repeat N-gram Size", 0, 5, 3)
+        temperature = st.sidebar.slider("Temperature", 0.1, 2.0, 0.9, 0.1)
     
     if st.sidebar.button("Clear History"):
         st.session_state.conversation_history = []
@@ -907,11 +856,8 @@ def main():
                     model, sp, st.session_state.pending_input,
                     max_len=max_length,
                     temperature=temperature,
-                    top_k=40,
                     special_token_ids=special_token_ids,
-                    decode_blocked_ids=decode_blocked_ids,
-                    repetition_penalty=repetition_penalty,
-                    no_repeat_ngram_size=no_repeat_ngram_size
+                    decode_blocked_ids=decode_blocked_ids
                 )
                 for decoded_text in response_generator:
                     full_response = decoded_text
@@ -928,9 +874,7 @@ def main():
                         model, sp, st.session_state.pending_input, 
                         max_len=max_length,
                         special_token_ids=special_token_ids,
-                        decode_blocked_ids=decode_blocked_ids,
-                        repetition_penalty=repetition_penalty,
-                        no_repeat_ngram_size=no_repeat_ngram_size
+                        decode_blocked_ids=decode_blocked_ids
                     )
                 else:
                     full_response = beam_search_generate(
@@ -938,9 +882,7 @@ def main():
                         beam_width=beam_width,
                         max_len=max_length,
                         special_token_ids=special_token_ids,
-                        decode_blocked_ids=decode_blocked_ids,
-                        repetition_penalty=repetition_penalty,
-                        no_repeat_ngram_size=no_repeat_ngram_size
+                        decode_blocked_ids=decode_blocked_ids
                     )
                 
                 response_placeholder.markdown(f"""
@@ -966,7 +908,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: gray; font-size: 14px;'>
-        PyTorch Causal Transformer for Urdu Text Generation
+        PyTorch Transformer for Urdu
     </div>
     """, unsafe_allow_html=True)
 
